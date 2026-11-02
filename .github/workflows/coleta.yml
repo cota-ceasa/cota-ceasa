@@ -1,0 +1,101 @@
+name: Coleta CEASA
+
+on:
+  schedule:
+    # Seg–Sáb, 12:17 e 18:47 de Brasília (cron em UTC; minutos "quebrados" atrasam menos)
+    - cron: "17 15 * * 1-6"
+    - cron: "47 21 * * 1-6"
+  workflow_dispatch:
+    inputs:
+      inicio:
+        description: "Baixar desde (AAAA-MM-DD). Vazio = últimos 30 dias"
+        default: ""
+      ceasa:
+        description: "IDs separados por espaço (vazio = todas)"
+        default: ""
+      max:
+        description: "Máx. de boletins novos por CEASA nesta execução"
+        default: "40"
+      discover:
+        description: "Só inspecionar o formulário desta CEASA (ex.: ES)"
+        default: ""
+  push:
+    branches: [main]
+    paths: ["docs/**"]   # mudou o app → só republica o site
+
+concurrency:
+  group: coleta
+  cancel-in-progress: false
+
+jobs:
+  coleta:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependências
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Coletar
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          INICIO: ${{ inputs.inicio }}
+          CEASA: ${{ inputs.ceasa }}
+          MAX: ${{ inputs.max }}
+          DISCOVER: ${{ inputs.discover }}
+        run: |
+          ARGS=()
+          [ -n "$INICIO" ] && ARGS+=(--inicio "$INICIO")
+          [ -n "$CEASA" ] && ARGS+=(--ceasa $CEASA)
+          [ -n "$MAX" ] && ARGS+=(--max "$MAX")
+          [ -n "$DISCOVER" ] && ARGS+=(--discover "$DISCOVER")
+          python -m coleta.run "${ARGS[@]}"
+
+      - name: Guardar PDFs e diagnósticos (7 dias)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: saida
+          path: saida/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Salvar dados.json no repositório
+        if: always()
+        run: |
+          git config user.name "coleta-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/dados.json
+          git diff --cached --quiet || { git commit -m "dados: $(date -u +%F)" && git push; }
+
+  publicar:
+    needs: coleta
+    if: always() && needs.coleta.result != 'cancelled'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}   # pega o dados.json recém-salvo
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - id: deploy
+        uses: actions/deploy-pages@v4
