@@ -16,17 +16,37 @@ from .ceasas import REGISTRO
 from .exportar import exportar
 from .extrair import linhas_do_pdf
 
+BRT = dt.timezone(dt.timedelta(hours=-3))  # Brasília (sem horário de verão)
 SAIDA = Path("saida")  # PDFs e diagnósticos (vira artefato no GitHub Actions)
 
 
-def coletar(c, page, conn, inicio, fim, maximo):
+def hora_limite(txt):
+    """'20:45' -> datetime de hoje nesse horário (Brasília); None = sem limite."""
+    if not txt:
+        return None
+    h, m = map(int, txt.split(":"))
+    agora = dt.datetime.now(BRT)
+    return agora.replace(hour=h, minute=m, second=0, microsecond=0)
+
+
+def coletar(c, page, conn, inicio, fim, maximo, limite=None):
     feitas = db.datas_resolvidas(conn, c.id)
-    pend = [(d, ref) for d, ref in c.datas(page) if inicio <= d <= fim and d not in feitas][:maximo]
-    print(f"[{c.id}] {len(pend)} boletins a baixar ({inicio} a {fim})")
-    for d, ref in pend:
+    pend = [(d, ref) for d, ref in c.datas(page) if inicio <= d <= fim and d not in feitas]
+    print(f"[{c.id}] {len(pend)} boletins pendentes ({inicio} a {fim}); "
+          f"baixando até {min(maximo, len(pend))} nesta execução")
+    seguidos = 0
+    for d, ref in pend[:maximo]:
+        if limite and dt.datetime.now(BRT) >= limite:
+            print(f"[{c.id}] parando: passou de {limite:%H:%M} (o site sai do ar à noite). Continua na próxima.")
+            break
         try:
             pdf = c.baixar(page, ref)
+            seguidos = 0
         except Exception as e:  # noqa: BLE001
+            seguidos += 1
+            if seguidos >= 3:  # site provavelmente fora do ar: não "queima" tentativas das outras datas
+                print(f"[{c.id}] 3 erros seguidos ({e}); site parece fora do ar. Continua na próxima execução.")
+                break
             db.gravar_boletim(conn, c.id, d, "erro", erro=str(e)[:500])
             print(f"[{c.id}] {d} erro: {e}")
             continue
@@ -69,6 +89,7 @@ def main():
     ap.add_argument("--max", type=int, default=40, help="máx. boletins novos por CEASA nesta execução")
     ap.add_argument("--json", default="docs/dados.json", help="arquivo de saída do app")
     ap.add_argument("--discover", metavar="ID", help="inspeciona o formulário de uma CEASA e sai")
+    ap.add_argument("--parar-as", metavar="HH:MM", help="não começa novos downloads depois desse horário (Brasília)")
     ap.add_argument("--headed", action="store_true", help="mostra o navegador (uso local)")
     a = ap.parse_args()
 
@@ -87,7 +108,8 @@ def main():
     if desconhecidas:
         raise SystemExit(f"CEASA sem coletor: {desconhecidas}. Disponíveis: {list(REGISTRO)}")
     alvo = [REGISTRO[i] for i in ids]
-    hoje = dt.date.today()
+    hoje = dt.datetime.now(BRT).date()
+    limite = hora_limite(a.parar_as)
     inicio = dt.date.fromisoformat(a.inicio) if a.inicio else hoje - dt.timedelta(days=30)
 
     conn = db.conectar()
@@ -98,7 +120,7 @@ def main():
         for c in alvo:  # uma CEASA com problema não derruba as outras
             ctx = browser.new_context(accept_downloads=True)
             try:
-                coletar(c, ctx.new_page(), conn, inicio, hoje, a.max)
+                coletar(c, ctx.new_page(), conn, inicio, hoje, a.max, limite)
             except Exception as e:  # noqa: BLE001
                 falhas += 1
                 print(f"[{c.id}] FALHOU: {e}")
