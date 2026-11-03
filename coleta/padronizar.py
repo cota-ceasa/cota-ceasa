@@ -28,6 +28,14 @@ APELIDOS_GERAIS = {
     "OVOS CODORNA": "Ovos de Codorna",
     "OVO CODORNA": "Ovos de Codorna",
     "LIMA PERSIA": "Lima da Pérsia",
+    "FAR MANDIOCA": "Farinha de Mandioca",
+    "FAR DE MANDIOCA": "Farinha de Mandioca",
+    "FARINHA MANDIOCA": "Farinha de Mandioca",
+    "FEIJAO CARIOQUINHA": "Feijão Carioca",
+    "FEIJAO CARIOCA": "Feijão Carioca",
+    "PHISALIS": "Physalis",
+    "FISALIS": "Physalis",
+    "CACAO": "Cacau",
     "UVA": "Uva (outras)",  # só vale quando nenhuma uva específica casar (Itália, Niágara, Passa)
 }
 

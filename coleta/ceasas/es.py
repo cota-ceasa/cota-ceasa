@@ -1,13 +1,14 @@
-"""CEASA-ES (Ceasa Grande Vitória) — formulário Scriptcase que gera o boletim em PDF.
+"""CEASA-ES (Ceasa Grande Vitória) — formulário Scriptcase com o boletim numa grade HTML.
 
 Formulário: select #id_sc_field_mercado (Grande Vitória = 211) e #id_sc_field_datas, botão Ok.
 Ao escolher o mercado (e às vezes a data) o site RECARREGA a página; por isso cada leitura
 espera a página assentar e tolera o "Execution context was destroyed" da recarga.
+Depois do Ok, a página boletim_completo_es.php mostra a grade com campos identificados
+(prdnom, embdesresu, pboprcmin, pboprccomum, pboprcmax, mersit): lemos direto do HTML.
 Se o site mudar, rode:  python -m coleta.run --discover ES
 """
 import re
-from pathlib import Path
-from urllib.parse import urljoin
+from html import unescape
 
 from ..padronizar import cotacao, numero
 from .base import Coletor, parse_data
@@ -17,9 +18,12 @@ SEL_MERCADO = "#id_sc_field_mercado"
 SEL_DATAS = "#id_sc_field_datas"
 MERCADO_ID = "211"  # CEASA GRANDE VITÓRIA
 # grafias do boletim do ES que diferem do nome padrão (o resto casa sozinho)
-APELIDOS = {}
+APELIDOS = {"MISTURA": "Mistura de Peixes"}  # no ES, "MISTURA" é peixe misto
 LINHA = re.compile(r"^(.+?)\s+(CX \d+ DZ|ENG \d+ UNID|UN \d+,\d+ KG|UN|KG)\s+"
                    r"([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)(?:\s+(M[A-Z]{1,2}))?$")
+# ids dos campos na grade do boletim (Scriptcase): id_sc_field_<campo>_<n>
+CAMPOS = ["id_sc_field_prdnom_", "id_sc_field_embdesresu_", "id_sc_field_pboprcmin_",
+          "id_sc_field_pboprccomum_", "id_sc_field_pboprcmax_", "id_sc_field_mersit_"]
 BTN_OK = ["#sc_b_ok_t", "#sc_b_ok_b", "a:has-text('Ok')", "text=Ok"]
 
 
@@ -72,70 +76,47 @@ class ColetorES(Coletor):
                     raise
                 page.wait_for_timeout(1500)
 
-    def baixar(self, page, ref):
-        ctx = page.context
-        respostas, downloads = [], []
-
-        def on_resp(r):
-            if "pdf" in r.headers.get("content-type", "").lower():
-                respostas.append(r)
-
-        on_down = downloads.append
-
-        def on_page(p):  # o PDF pode abrir em outra aba
-            p.on("download", on_down)
-
-        ctx.on("response", on_resp)
-        ctx.on("page", on_page)
-        page.on("download", on_down)
+    def capturar(self, page, ref):
+        """Abre o boletim da data e lê a tabela direto do HTML (não precisa gerar PDF).
+        Retorna (html_bytes, 'html', linhas) ou None se o site não trouxer o boletim."""
+        self._abrir(page)
+        page.select_option(SEL_DATAS, value=ref)   # pode recarregar a página também
+        page.wait_for_timeout(1000)
+        page.wait_for_load_state("networkidle")
+        for s in BTN_OK:
+            loc = page.locator(s)
+            if loc.count():
+                loc.first.click()
+                break
+        else:
+            raise RuntimeError("botão Ok não encontrado")
         try:
-            self._abrir(page)
-            page.select_option(SEL_DATAS, value=ref)   # pode recarregar a página também
-            page.wait_for_timeout(1000)
-            page.wait_for_load_state("networkidle")
-            for s in BTN_OK:
-                loc = page.locator(s)
-                if loc.count():
-                    loc.first.click()
-                    break
-            else:
-                raise RuntimeError("botão Ok não encontrado")
-            for _ in range(40):  # até ~20 s
-                if respostas or downloads or self._link_pdf(ctx):
-                    break
-                page.wait_for_timeout(500)
-            if respostas:
-                return respostas[-1].body()
-            if downloads:
-                return Path(downloads[-1].path()).read_bytes()
-            # Scriptcase costuma gravar o PDF em /_lib/tmp/sc_pdf_*.pdf e só mostrar um link
-            url = self._link_pdf(ctx)
-            if url:
-                r = ctx.request.get(url, timeout=60000, ignore_https_errors=True)
-                if r.ok and r.body()[:4] == b"%PDF":
-                    return r.body()
-            return None
+            html = self._esperar_grade(page.context)
         finally:
-            ctx.remove_listener("response", on_resp)
-            ctx.remove_listener("page", on_page)
-            page.remove_listener("download", on_down)
-            for p in ctx.pages:
-                if p != page:
-                    p.close()
+            for p in page.context.pages[1:]:  # fecha abas extras, se o site abrir alguma
+                p.close()
+        if html is None:
+            return None
+        linhas = linhas_do_html(html)
+        if not any(len(c) == 6 for *_x, c in linhas):
+            return None  # página sem linhas de preço (ex.: "registros não encontrados")
+        return html.encode("utf-8"), "html", linhas
 
     @staticmethod
-    def _link_pdf(ctx):
-        """Procura em todas as abas um link para o PDF gerado (ex.: .../_lib/tmp/sc_pdf_..._es.pdf)."""
-        for p in ctx.pages:
-            urls = [p.url]
-            try:
-                urls += re.findall(r'[\w./:-]*_lib/tmp/[\w.-]+\.pdf', p.content())
-            except Exception:  # noqa: BLE001 (aba ainda carregando)
-                continue
-            for u in urls:
-                if re.search(r"_lib/tmp/[\w.-]+\.pdf", u or ""):
-                    return urljoin(p.url, u)
-        return None
+    def _esperar_grade(ctx, segundos=40):
+        """Espera a grade do boletim aparecer (na mesma aba ou numa nova) e devolve o HTML."""
+        for _ in range(segundos * 2):
+            for p in ctx.pages:
+                try:
+                    if p.locator(f"[id^='{CAMPOS[0]}']").count():
+                        p.wait_for_load_state("networkidle")
+                        return p.content()
+                    if re.search(r"n[ãa]o (foram )?encontrad", p.locator("body").inner_text(), re.I):
+                        return None
+                except Exception:  # noqa: BLE001 (página carregando)
+                    pass
+            ctx.pages[0].wait_for_timeout(500)
+        raise RuntimeError("a tabela do boletim não apareceu em 40 s")
 
     def normalizar(self, linhas, data):
         """Tabela do boletim: DESCRIÇÃO | EMBALAGEM | MÍN | COMUM | MÁX | SITUAÇÃO (ME/MFI/MFR).
@@ -190,3 +171,20 @@ class ColetorES(Coletor):
             print("Falha ao carregar datas:", e)
         page.screenshot(path=str(pasta / "pagina.png"), full_page=True)
         print(f"Salvei {pasta}/pagina_inicial.html e pagina.png")
+
+
+def linhas_do_html(html):
+    """Grade do boletim -> [(pagina, ordem, metodo, celulas)], no mesmo formato da extração de PDF.
+    A 1ª linha é o cabeçalho 'Data Pesquisada: dd/mm/aaaa' (usado para conferir a data)."""
+    texto = lambda x: re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", x))).strip()
+    out = []
+    m = re.search(r"Data Pesquisada:?\s*[^<]*", html)
+    if m:
+        out.append((1, 0, "html", [texto(m.group(0))]))
+    valores = {}
+    for campo, n, v in re.findall(r'id="(id_sc_field_[a-z]+_)(\d+)"[^>]*>(.*?)</span>', html, re.S):
+        if campo in CAMPOS:
+            valores.setdefault(int(n), {})[campo] = texto(v)
+    for n in sorted(valores):
+        out.append((1, len(out), "html", [valores[n].get(c, "") for c in CAMPOS]))
+    return out

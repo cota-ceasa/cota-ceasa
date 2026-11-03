@@ -30,10 +30,11 @@ Actions → **Coleta CEASA** → *Run workflow*:
 2. `inicio = 2026-01-01`, `max = 200` → carga histórica. Os PDFs ficam no artefato **saida** por 7 dias.
 3. Depois disso o agendamento cuida dos boletins novos.
 
-> **Status atual (ES):** coleta e parser prontos, testados com o boletim real de 30/10/2026
-> (147 linhas, 147 validadas). Linhas que não passam na conferência (produto desconhecido,
-> embalagem fora de `EMB`, mín > comum > máx, data do PDF diferente da pedida) ficam no banco
-> como `revisar`, aparecem no log da execução e não vão para o app.
+> **Status atual (ES):** o coletor lê a tabela HTML do boletim (página boletim_completo_es.php),
+> sem gerar PDF. Testado com o boletim real de 20/08/2026: 171 linhas, 171 validadas.
+> Linhas que não passam na conferência (produto desconhecido, embalagem fora de `EMB`,
+> mín > comum > máx, data do boletim diferente da pedida) ficam no banco como `revisar`,
+> aparecem no log e não vão para o app.
 
 ## Adicionar outra CEASA
 

@@ -14,10 +14,9 @@ from pathlib import Path
 from . import db
 from .ceasas import REGISTRO
 from .exportar import exportar
-from .extrair import linhas_do_pdf
 
 BRT = dt.timezone(dt.timedelta(hours=-3))  # Brasília (sem horário de verão)
-SAIDA = Path("saida")  # PDFs e diagnósticos (vira artefato no GitHub Actions)
+SAIDA = Path("saida")  # boletins brutos e diagnósticos (vira artefato no GitHub Actions)
 
 
 def hora_limite(txt):
@@ -40,30 +39,25 @@ def coletar(c, page, conn, inicio, fim, maximo, limite=None):
             print(f"[{c.id}] parando: passou de {limite:%H:%M} (o site sai do ar à noite). Continua na próxima.")
             break
         try:
-            pdf = c.baixar(page, ref)
+            res = c.capturar(page, ref)
             seguidos = 0
         except Exception as e:  # noqa: BLE001
             seguidos += 1
-            if seguidos >= 3:  # site provavelmente fora do ar: não "queima" tentativas das outras datas
-                print(f"[{c.id}] 3 erros seguidos ({e}); site parece fora do ar. Continua na próxima execução.")
-                break
             db.gravar_boletim(conn, c.id, d, "erro", erro=str(e)[:500])
             print(f"[{c.id}] {d} erro: {e}")
+            if seguidos >= 3:  # site provavelmente fora do ar: para e tenta na próxima execução
+                print(f"[{c.id}] 3 erros seguidos; parando. Continua na próxima execução.")
+                break
             continue
-        if not pdf:
-            db.gravar_boletim(conn, c.id, d, "sem_pdf")
-            print(f"[{c.id}] {d} sem PDF")
+        if not res:
+            db.gravar_boletim(conn, c.id, d, "sem_dados")
+            print(f"[{c.id}] {d} sem dados no site")
             continue
+        bruto, ext, linhas = res
         pasta = SAIDA / c.id
         pasta.mkdir(parents=True, exist_ok=True)
-        (pasta / f"{d}.pdf").write_bytes(pdf)
-        try:
-            linhas = linhas_do_pdf(pdf)
-        except Exception as e:  # noqa: BLE001
-            db.gravar_boletim(conn, c.id, d, "erro", erro=f"PDF ilegível: {e}"[:500])
-            print(f"[{c.id}] {d} PDF ilegível: {e}")
-            continue
-        db.gravar_boletim(conn, c.id, d, "ok", hashlib.sha256(pdf).hexdigest(), linhas)
+        (pasta / f"{d}.{ext}").write_bytes(bruto)
+        db.gravar_boletim(conn, c.id, d, "ok", hashlib.sha256(bruto).hexdigest(), linhas)
         print(f"[{c.id}] {d} ok ({len(linhas)} linhas)")
         page.wait_for_timeout(1500)  # pausa educada com o servidor
 

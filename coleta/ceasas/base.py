@@ -30,6 +30,13 @@ class Coletor:
         """Bytes do PDF do boletim, ou None se o site não tiver o arquivo."""
         raise NotImplementedError
 
+    def capturar(self, page, ref):
+        """Boletim de uma data: (bytes_brutos, extensão, linhas) ou None se não houver.
+        Padrão: baixa o PDF com baixar() e extrai as linhas. Sobrescreva se a CEASA publica em HTML."""
+        from ..extrair import linhas_do_pdf
+        pdf = self.baixar(page, ref)
+        return (pdf, "pdf", linhas_do_pdf(pdf)) if pdf else None
+
     def normalizar(self, linhas, data):
         """Converte as linhas cruas do PDF em cotações padronizadas.
 

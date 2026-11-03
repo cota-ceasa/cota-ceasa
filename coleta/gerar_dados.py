@@ -37,14 +37,17 @@ GRUPOS = {
                 "Pimentão Amarelo", "Pimentão Verde", "Pimentão Vermelho", "Quiabo", "Tomate", "Vagem"],
     "raizes": ["Aipim / Mandioca", "Alho", "Batata", "Batata Doce", "Beterraba", "Cará", "Cebola",
                "Cenoura", "Gengibre", "Inhame"],
-    "temperos": ["Alecrim", "Alho-poró", "Cebolinha", "Coentro", "Hortelã", "Manjericão", "Salsa"],
-    "frutas": ["Abacate", "Abacaxi", "Ameixa", "Cajamanga", "Banana Figo", "Banana Maçã", "Banana Nanica", "Banana Ouro",
+    "temperos": ["Alecrim", "Alho-poró", "Cebolinha", "Coentro", "Erva Doce", "Hortelã", "Manjericão", "Salsa",
+                 "Sálvia", "Tomilho"],
+    "frutas": ["Abacate", "Abacaxi", "Ameixa", "Cacau", "Caju", "Cajamanga", "Graviola", "Nectarina", "Physalis", "Pinha", "Banana Figo", "Banana Maçã", "Banana Nanica", "Banana Ouro",
                "Banana Prata", "Banana Terra", "Coco Seco", "Coco Verde", "Goiaba", "Kiwi", "Laranja Baía",
                "Laranja Lima", "Laranja Pera", "Lima da Pérsia", "Limão Siciliano", "Limão Tahiti",
                "Mamão Formosa", "Mamão Havaí", "Manga", "Maracujá Azedo", "Maçã", "Melancia", "Melão",
                "Morango", "Pêra", "Pêssego", "Tangerina", "Uva (outras)", "Uva Itália", "Uva Niágara", "Uva Passa"],
-    "ovos_graos": ["Amendoim", "Farinha de Mandioca", "Feijão Preto", "Feijão Vermelho", "Fubá",
-                   "Milho Seco", "Ovos", "Ovos de Codorna"],
+    "ovos_graos": ["Amendoim", "Farinha de Mandioca", "Feijão Carioca", "Feijão Manteiga", "Feijão Preto",
+                   "Feijão Vermelho", "Fubá", "Milho Seco", "Ovos", "Ovos de Codorna"],
+    "pescados": ["Atum", "Camarão", "Corvina", "Manjuba", "Mistura de Peixes", "Panga", "Pargo", "Pescadinha",
+                 "Raia", "Sardinha", "Tainha"],
 }
 GRUPO_DE = {p: g for g, ps in GRUPOS.items() for p in ps}
 
