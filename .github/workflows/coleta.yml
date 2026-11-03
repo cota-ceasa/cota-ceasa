@@ -2,20 +2,21 @@ name: Coleta CEASA
 
 on:
   schedule:
-    # Seg–Sáb, 12:17 e 18:47 de Brasília (cron em UTC; minutos "quebrados" atrasam menos)
-    - cron: "17 15 * * 1-6"
-    - cron: "47 21 * * 1-6"
+    # Horários de Brasília (cron em UTC = Brasília + 3h). Minuto 07 evita a fila do minuto 00.
+    - cron: "7 6 * * *"    # 03:07
+    - cron: "7 8 * * *"    # 05:07
+    - cron: "7 10 * * *"   # 07:07
   workflow_dispatch:
     inputs:
       inicio:
         description: "Baixar desde (AAAA-MM-DD). Vazio = últimos 30 dias"
-        default: ""
+        default: "2020-01-01"
       ceasa:
         description: "IDs separados por espaço (vazio = todas)"
         default: ""
       max:
-        description: "Máx. de boletins novos por CEASA nesta execução"
-        default: "40"
+        description: "Máx. de boletins novos por CEASA (vazio = padrão)"
+        default: "5000"
       discover:
         description: "Só inspecionar o formulário desta CEASA (ex.: ES)"
         default: ""
@@ -31,7 +32,7 @@ jobs:
   coleta:
     if: github.event_name != 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
     permissions:
       contents: write
     steps:
@@ -50,9 +51,11 @@ jobs:
       - name: Coletar
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          INICIO: ${{ inputs.inicio }}
+          # Sem valor digitado, usa as variáveis do repositório (Settings → Variables).
+          # HISTORICO_INICIO=2021-12-01 faz toda execução agendada continuar a carga histórica.
+          INICIO: ${{ inputs.inicio || vars.HISTORICO_INICIO }}
           CEASA: ${{ inputs.ceasa }}
-          MAX: ${{ inputs.max }}
+          MAX: ${{ inputs.max || vars.HISTORICO_MAX || '40' }}
           DISCOVER: ${{ inputs.discover }}
         run: |
           ARGS=()
@@ -60,7 +63,7 @@ jobs:
           [ -n "$CEASA" ] && ARGS+=(--ceasa $CEASA)
           [ -n "$MAX" ] && ARGS+=(--max "$MAX")
           [ -n "$DISCOVER" ] && ARGS+=(--discover "$DISCOVER")
-          python -m coleta.run "${ARGS[@]}"
+          python -m coleta.run --parar-as 20:40 "${ARGS[@]}"
 
       - name: Guardar PDFs e diagnósticos (7 dias)
         if: always()
