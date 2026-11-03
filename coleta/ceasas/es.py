@@ -1,7 +1,8 @@
 """CEASA-ES (Ceasa Grande Vitória) — formulário Scriptcase que gera o boletim em PDF.
 
-O formulário tem 2 selects (Mercado, Data) e um botão Ok. Os nomes internos dos campos
-não foram confirmados, por isso a navegação é genérica (1º select = mercado, 2º = data).
+Formulário: select #id_sc_field_mercado (Grande Vitória = 211) e #id_sc_field_datas, botão Ok.
+Ao escolher o mercado (e às vezes a data) o site RECARREGA a página; por isso cada leitura
+espera a página assentar e tolera o "Execution context was destroyed" da recarga.
 Se o site mudar, rode:  python -m coleta.run --discover ES
 """
 import re
@@ -12,7 +13,9 @@ from ..padronizar import cotacao, numero
 from .base import Coletor, parse_data
 
 URL = "http://200.198.51.71/detec/filtro_boletim_es/filtro_boletim_es.php"
-MERCADO = "CEASA GRANDE VITÓRIA"
+SEL_MERCADO = "#id_sc_field_mercado"
+SEL_DATAS = "#id_sc_field_datas"
+MERCADO_ID = "211"  # CEASA GRANDE VITÓRIA
 # grafias do boletim do ES que diferem do nome padrão (o resto casa sozinho)
 APELIDOS = {}
 LINHA = re.compile(r"^(.+?)\s+(CX \d+ DZ|ENG \d+ UNID|UN \d+,\d+ KG|UN|KG)\s+"
@@ -25,27 +28,49 @@ class ColetorES(Coletor):
     nome = "CEASA - Vitória (ES)"
     uf = "ES"
 
+    @staticmethod
+    def _contar(page, seletor, tentativas=60, minimo=2):
+        """Espera o select ter ao menos 'minimo' opções, atravessando recargas da página."""
+        for _ in range(tentativas):
+            try:
+                page.wait_for_load_state("domcontentloaded")
+                if page.locator(f"{seletor} option").count() >= minimo:
+                    return True
+            except Exception:  # noqa: BLE001 (página recarregando no meio da leitura)
+                pass
+            page.wait_for_timeout(500)
+        return False
+
     def _abrir(self, page):
         page.goto(URL, wait_until="networkidle", timeout=60000)
-        sel = page.locator("select")
-        if sel.count() < 2:
-            raise RuntimeError("formulário mudou: não achei os 2 selects (rode --discover ES)")
-        sel.nth(0).select_option(label=MERCADO)
-        for _ in range(40):  # a lista de datas pode vir por ajax
-            if sel.nth(1).locator("option").count() > 1:
-                break
-            page.wait_for_timeout(500)
-        return sel.nth(1)
+        if not self._contar(page, SEL_MERCADO):
+            raise RuntimeError("formulário mudou: select de mercado não encontrado (rode --discover ES)")
+        valor = MERCADO_ID
+        for o in page.locator(f"{SEL_MERCADO} option").all():  # confirma pelo nome, se o código mudar
+            if "GRANDE VIT" in o.inner_text().upper():
+                valor = o.get_attribute("value")
+        page.select_option(SEL_MERCADO, value=valor)   # dispara a recarga
+        page.wait_for_timeout(1000)
+        if not self._contar(page, SEL_DATAS):
+            raise RuntimeError("a lista de datas não carregou depois de escolher o mercado")
+        page.wait_for_load_state("networkidle")
+        return page.locator(SEL_DATAS)
 
     def datas(self, page):
         dsel = self._abrir(page)
-        out = set()
-        for o in dsel.locator("option").all():
-            ref = o.get_attribute("value")
-            d = parse_data(o.inner_text()) or parse_data(ref)
-            if d:
-                out.add((d, ref))
-        return sorted(out)
+        for tentativa in range(3):  # se a página ainda recarregar durante a leitura, lê de novo
+            try:
+                out = set()
+                for o in dsel.locator("option").all():
+                    ref = o.get_attribute("value")
+                    d = parse_data(o.inner_text()) or parse_data(ref)
+                    if d:
+                        out.add((d, ref))
+                return sorted(out)
+            except Exception:  # noqa: BLE001
+                if tentativa == 2:
+                    raise
+                page.wait_for_timeout(1500)
 
     def baixar(self, page, ref):
         ctx = page.context
@@ -64,8 +89,10 @@ class ColetorES(Coletor):
         ctx.on("page", on_page)
         page.on("download", on_down)
         try:
-            dsel = self._abrir(page)
-            dsel.select_option(value=ref)
+            self._abrir(page)
+            page.select_option(SEL_DATAS, value=ref)   # pode recarregar a página também
+            page.wait_for_timeout(1000)
+            page.wait_for_load_state("networkidle")
             for s in BTN_OK:
                 loc = page.locator(s)
                 if loc.count():
