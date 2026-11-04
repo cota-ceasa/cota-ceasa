@@ -46,7 +46,7 @@ GRUPOS = {
                "Morango", "Pêra", "Pêssego", "Tangerina", "Uva (outras)", "Uva Itália", "Uva Niágara", "Uva Passa"],
     "ovos_graos": ["Amendoim", "Farinha de Mandioca", "Feijão Carioca", "Feijão Manteiga", "Feijão Preto",
                    "Feijão Vermelho", "Fubá", "Milho Seco", "Ovos", "Ovos de Codorna"],
-    "pescados": ["Atum", "Camarão", "Corvina", "Manjuba", "Mistura de Peixes", "Panga", "Pargo", "Pescadinha",
+    "pescados": ["Atum", "Bacalhau", "Camarão", "Corvina", "Manjuba", "Mistura de Peixes", "Panga", "Pargo", "Pescadinha",
                  "Raia", "Sardinha", "Tainha"],
 }
 GRUPO_DE = {p: g for g, ps in GRUPOS.items() for p in ps}
@@ -61,6 +61,39 @@ EMB = {
     "UN 1,5 KG":   ("un", 1,  "unidade ≈ 1,5 kg"),
     "UN 2,0 KG":   ("un", 1,  "unidade ≈ 2 kg"),
 }
+GRUPO_PADRAO = "outros"   # produto novo (ainda sem grupo) aparece no app em "Outros"
+
+
+def grupo_de(produto):
+    return GRUPO_DE.get(produto, GRUPO_PADRAO)
+
+
+def emb_info(emb):
+    """(unidade, divisor, rótulo) da embalagem. Conhecidas vêm de EMB; as novas são deduzidas
+    do texto ('CX 20 DZ', 'ENG 12 UNID', 'UN 1,2 KG', 'SC 25 KG'...) em vez de descartar a linha."""
+    emb = re.sub(r"\s+", " ", (emb or "").strip().upper())
+    if emb in EMB:
+        return EMB[emb]
+    num = lambda t: float(t.replace(",", "."))
+    m = re.fullmatch(r"(?:CX|CAIXA)\s+(\d+)\s+DZ", emb)
+    if m:
+        return ("dz", int(m.group(1)), f"caixa {m.group(1)} dz")
+    m = re.fullmatch(r"(?:ENG|CX|SC|PCT|BDJ)\s+(\d+)\s+UNID?", emb)
+    if m:
+        return ("un", int(m.group(1)), f"{emb.split()[0].lower()} {m.group(1)} un")
+    m = re.fullmatch(r"UN\s+([\d.,]+)\s*KG", emb)
+    if m:
+        return ("un", 1, f"unidade ≈ {m.group(1)} kg")
+    m = re.fullmatch(r"(?:CX|SC|PCT|SACO|BDJ|ENG)\s+([\d.,]+)\s*KG", emb)
+    if m and num(m.group(1)) > 0:
+        return ("kg", num(m.group(1)), "kg")   # preço da embalagem dividido pelo peso -> R$/kg
+    if emb in ("UN", "UNID", "UNIDADE"):
+        return ("un", 1, "unidade")
+    if emb in ("DZ", "DUZIA"):
+        return ("dz", 1, "dúzia")
+    return None
+
+
 ABREV = {"ESP": "Especial", "PRIM": "Primeira", "IMP": "Importado", "BCO": "Branco", "VERM": "Vermelho",
          "GRAND": "Grande", "NAC": "Nacional", "EXT": "Extra", "SEG": "Segunda", "ARGENT": "Argentino"}
 
@@ -85,7 +118,7 @@ def gerar(df, saida, rotulos=None):
     Retorna True se gravou o arquivo."""
     rotulos = rotulos or ROTULOS
     df = df[df["Conferência"] == "validado"].copy()
-    df = df[df["Embalagem"].isin(EMB) & df["Produto"].isin(GRUPO_DE)]
+    df = df[df["Embalagem"].map(lambda e: emb_info(e) is not None)]
     if df.empty:
         print("Nenhuma cotação válida: dados.json não foi alterado.")
         return False
@@ -106,9 +139,9 @@ def gerar(df, saida, rotulos=None):
     itens = {}
     for (mid, prod, det, emb), g in df.groupby(["Mercado", "Produto", "det", "Embalagem"]):
         g = g.drop_duplicates("Data", keep="last")
-        un, div, rot = EMB[emb]
+        un, div, rot = emb_info(emb)
         chave = f"{prod}|{det}|{emb}"
-        it = itens.setdefault(chave, {"k": chave, "p": prod, "d": det, "g": GRUPO_DE[prod],
+        it = itens.setdefault(chave, {"k": chave, "p": prod, "d": det, "g": grupo_de(prod),
                                       "u": un, "e": rot, "m": {}})
         h = [None] * len(idx_data[mid])
         for r in g.itertuples(index=False):

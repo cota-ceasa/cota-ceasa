@@ -10,7 +10,7 @@ Se o site mudar, rode:  python -m coleta.run --discover ES
 import re
 from html import unescape
 
-from ..padronizar import cotacao, numero
+from ..padronizar import cotacao, numero, produto_detalhe
 from .base import Coletor, parse_data
 
 URL = "http://200.198.51.71/detec/filtro_boletim_es/filtro_boletim_es.php"
@@ -92,6 +92,8 @@ class ColetorES(Coletor):
             raise RuntimeError("botão Ok não encontrado")
         try:
             html = self._esperar_grade(page.context)
+            if html is not None:
+                html = self._todas_as_paginas(page.context, html)
         finally:
             for p in page.context.pages[1:]:  # fecha abas extras, se o site abrir alguma
                 p.close()
@@ -101,6 +103,58 @@ class ColetorES(Coletor):
         if not any(len(c) == 6 for *_x, c in linhas):
             return None  # página sem linhas de preço (ex.: "registros não encontrados")
         return html.encode("utf-8"), "html", linhas
+
+    @staticmethod
+    def _grade_page(ctx):
+        for p in ctx.pages:
+            try:
+                if p.locator(f"[id^='{CAMPOS[0]}']").count():
+                    return p
+            except Exception:  # noqa: BLE001
+                pass
+        return None
+
+    def _todas_as_paginas(self, ctx, html, limite=60):
+        """A grade (Scriptcase) pode vir paginada. Aumenta as linhas por página, se houver o seletor,
+        e segue em 'avançar' até acabar, juntando o HTML das páginas. Sem paginação = 1 página."""
+        p = self._grade_page(ctx)
+        if p is None:
+            return html
+        try:  # tenta mostrar o máximo de linhas por página
+            for sel in ("select[name^='nmgp_quant_linhas']", "select[id^='quant_linhas']"):
+                s = p.locator(sel)
+                if s.count():
+                    ops = [o.get_attribute("value") for o in s.first.locator("option").all()]
+                    ops = [o for o in ops if o and o.isdigit()]
+                    if ops:
+                        s.first.select_option(value=max(ops, key=int))
+                        p.wait_for_load_state("networkidle")
+                        p.wait_for_timeout(800)
+                        html = p.content()
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+        partes, vistas = [html], {_assinatura(html)}
+        for _ in range(limite):
+            prox = p.locator("[id^='forward_']:not(.disabled), a[id^='forward_']")
+            prox = [prox.nth(i) for i in range(prox.count()) if prox.nth(i).is_visible()]
+            if not prox:
+                break
+            try:
+                prox[0].click()
+                p.wait_for_load_state("networkidle")
+                p.wait_for_timeout(800)
+                h = p.content()
+            except Exception:  # noqa: BLE001
+                break
+            a = _assinatura(h)
+            if a in vistas:  # voltou para uma página já lida (último botão ainda clicável)
+                break
+            vistas.add(a)
+            partes.append(h)
+        if len(partes) > 1:
+            print(f"[ES] boletim em {len(partes)} páginas")
+        return "\n".join(partes)
 
     @staticmethod
     def _esperar_grade(ctx, segundos=40):
@@ -136,6 +190,17 @@ class ColetorES(Coletor):
             c = cotacao(*partes, apelidos=APELIDOS, data_ok=data_pdf in (None, data))
             if c:
                 out.append(c)
+        # Mesma linha repetida no boletim (ex.: "UVA RED GLOBE" nacional e importada, sem rótulo):
+        # a 2ª ganha " (2)" no detalhe. Sem isso o app gravava só uma das duas.
+        vistas = {}
+        for c in out:
+            k = (c["produto"], c["detalhe"], c["embalagem"])
+            vistas[k] = vistas.get(k, 0) + 1
+            if vistas[k] > 1:
+                c["detalhe"] = f"{c['detalhe']} ({vistas[k]})".strip()
+        novos = sorted({c["produto"] for c in out if produto_detalhe(c["produto"], APELIDOS)[0] is None})
+        if novos:
+            print(f"[ES] {data}: produtos novos (entram em 'Outros'; cadastre em GRUPOS): {novos}")
         if data_pdf and data_pdf != data:
             print(f"[ES] atenção: boletim pedido para {data}, PDF diz {data_pdf} (linhas ficam 'revisar')")
         revisar = sorted({f"{c['produto']} {c['detalhe']} [{c['embalagem']}]".strip()
@@ -181,10 +246,20 @@ def linhas_do_html(html):
     m = re.search(r"Data Pesquisada:?\s*[^<]*", html)
     if m:
         out.append((1, 0, "html", [texto(m.group(0))]))
-    valores = {}
-    for campo, n, v in re.findall(r'id="(id_sc_field_[a-z]+_)(\d+)"[^>]*>(.*?)</span>', html, re.S):
-        if campo in CAMPOS:
-            valores.setdefault(int(n), {})[campo] = texto(v)
-    for n in sorted(valores):
-        out.append((1, len(out), "html", [valores[n].get(c, "") for c in CAMPOS]))
+    # Percorre os <tr> da grade (e não só os ids numerados): se o site repetir ou reiniciar a
+    # numeração entre páginas, nenhuma linha se perde nem se sobrescreve.
+    esperadas = len(re.findall(r'id="SC_ancor\d+"', html))
+    for tr in re.findall(r"<tr\b[^>]*>(.*?)</tr>", html, re.S):
+        achados = {campo: texto(v) for campo, v in
+                   re.findall(r'id="(id_sc_field_[a-z]+_)\d+"[^>]*>(.*?)</span>', tr, re.S) if campo in CAMPOS}
+        if CAMPOS[0] in achados:
+            out.append((1, len(out), "html", [achados.get(c, "") for c in CAMPOS]))
+    lidas = len(out) - (1 if m else 0)
+    if esperadas and lidas != esperadas:
+        print(f"[ES] atenção: a página tem {esperadas} linhas de preço e li {lidas}")
     return out
+
+
+def _assinatura(html):
+    """Identifica o conteúdo da grade (para saber se uma página é nova)."""
+    return hash(tuple(re.findall(r'id="id_sc_field_prdnom_\d+"[^>]*>(.*?)</span>', html, re.S)))

@@ -7,7 +7,7 @@ de apelidos por CEASA, sem mexer na lógica.
 import re
 import unicodedata
 
-from .gerar_dados import EMB, GRUPO_DE
+from .gerar_dados import GRUPO_DE, emb_info
 
 SITUACAO = {"ME": "estável", "MFI": "firme", "MFR": "fraco"}
 
@@ -74,6 +74,11 @@ def produto_detalhe(descricao, apelidos=None):
     return None, ""
 
 
+def nome_novo(descricao):
+    """'BACALHAU SECO' -> 'Bacalhau Seco' (nome de produto ainda não cadastrado)."""
+    return " ".join(w.capitalize() for w in re.sub(r"\s+", " ", str(descricao)).strip().split())
+
+
 def numero(txt):
     """'1.234,56' -> 1234.56; None se vazio ou inválido."""
     txt = (txt or "").strip().replace(".", "").replace(",", ".")
@@ -91,10 +96,13 @@ def cotacao(descricao, embalagem, mn, com, mx, sit, apelidos=None, data_ok=True)
     mn, mx = numero(mn), numero(mx)
     produto, detalhe = produto_detalhe(descricao, apelidos)
     emb = re.sub(r"\s+", " ", (embalagem or "").strip().upper())
-    ok = (data_ok and produto is not None and emb in EMB and com > 0
+    # Produto que o app ainda não conhece NÃO é descartado: entra com o nome do boletim
+    # (em "Outros"), desde que os números e a embalagem façam sentido. O log avisa para
+    # você decidir se vale cadastrar o nome em GRUPOS.
+    ok = (data_ok and emb_info(emb) is not None and com > 0
           and (mn is None or mn <= com) and (mx is None or com <= mx))
     return {
-        "produto": produto or norm(descricao),
+        "produto": produto or nome_novo(descricao),
         "detalhe": detalhe,
         "embalagem": emb,
         "minimo": mn, "comum": com, "maximo": mx,

@@ -30,7 +30,14 @@ Actions → **Coleta CEASA** → *Run workflow*:
 2. `inicio = 2026-01-01`, `max = 200` → carga histórica. Os PDFs ficam no artefato **saida** por 7 dias.
 3. Depois disso o agendamento cuida dos boletins novos.
 
-> **Status atual (ES):** o coletor lê a tabela HTML do boletim (página boletim_completo_es.php),
+> **Correção 04/11/2026 (ES):** testado com o boletim de 04/11/2026 (152 linhas → 152 validadas).
+> Agora: (1) produto novo no boletim não é mais descartado, entra no app em "Outros" e o log
+> avisa para cadastrar em `GRUPOS`; (2) linhas repetidas no mesmo boletim (ex.: UVA RED GLOBE
+> duas vezes) ficam as duas, a 2ª com " (2)"; (3) embalagens novas (CX 20 DZ, SC 25 KG...) são
+> deduzidas em vez de descartadas; (4) se a grade vier paginada, o coletor avança as páginas;
+> (5) o log avisa se leu menos linhas do que a página tem.
+>
+> **Status anterior (ES):** o coletor lê a tabela HTML do boletim (página boletim_completo_es.php),
 > sem gerar PDF. Testado com o boletim real de 20/08/2026: 171 linhas, 171 validadas.
 > Linhas que não passam na conferência (produto desconhecido, embalagem fora de `EMB`,
 > mín > comum > máx, data do boletim diferente da pedida) ficam no banco como `revisar`,
